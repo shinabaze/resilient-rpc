@@ -3,7 +3,10 @@
   "version": "0.1.0",
   "description": "A pool of JSON-RPC endpoints that ranks itself by speed, bans each one for as long as its error says, and keeps paid capacity for the calls that matter.",
   "type": "module",
-  "exports": "./src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./ethers": "./src/ethers.js"
+  },
   "engines": { "node": ">=22" },
   "scripts": {
     "test": "node --test",
