@@ -35,6 +35,7 @@ export class RpcPool {
     this.hangStreak = opts.hangStreak ?? 3;
     this.hangBanMs = opts.hangBanMs ?? 60_000;
     this.fastRatio = opts.fastRatio ?? 1.5;
+    this.fastSlackMs = opts.fastSlackMs ?? 25;   // so a few ms of jitter can't bench an endpoint
     this.exploreEvery = opts.exploreEvery ?? 20;
     this.alpha = opts.alpha ?? 0.2;
     this.reservedFromTier = opts.reservedFromTier ?? 2;
@@ -46,7 +47,6 @@ export class RpcPool {
     this.reservedRefused = 0;
     this.windowStart = 0;
     this.calls = 0;
-    this.turn = 0;
     this.now = opts.now ?? Date.now;
     this.fetch = opts.fetch ?? globalThis.fetch;
     this.log = opts.log ?? (() => {});
@@ -93,8 +93,8 @@ export class RpcPool {
   }
 
   // The order to try endpoints in for this call: tier by tier, and within a tier the fast
-  // group first. The fast group is rotated so one endpoint doesn't take every call and get
-  // rate-limited for it.
+  // group first. Inside the fast group, whoever has waited longest goes first, so the traffic
+  // is shared and no endpoint gets rate-limited for being the quickest.
   order(method) {
     const now = this.now();
     const usable = this.endpoints.filter((ep) => now >= ep.bannedUntil && !ep.unsupported.has(method));
@@ -105,10 +105,10 @@ export class RpcPool {
       const measured = group.filter((ep) => ep.ewmaMs !== null).map((ep) => ep.ewmaMs);
       const best = measured.length ? Math.min(...measured) : 0;
       // Unmeasured endpoints count as fast, so a new one gets measured straight away.
-      let fast = group.filter((ep) => ep.ewmaMs === null || ep.ewmaMs <= best * this.fastRatio);
+      const cutoff = Math.max(best * this.fastRatio, best + this.fastSlackMs);
+      const fast = group.filter((ep) => ep.ewmaMs === null || ep.ewmaMs <= cutoff)
+        .sort((a, b) => a.lastUsed - b.lastUsed);
       const slow = group.filter((ep) => !fast.includes(ep)).sort((a, b) => a.ewmaMs - b.ewmaMs);
-      const k = this.turn++ % fast.length;
-      fast = [...fast.slice(k), ...fast.slice(0, k)];
       // Now and then, ask the least recently used slow endpoint first. Otherwise one that has
       // got faster again is never measured again.
       if (slow.length && this.calls % this.exploreEvery === 0) {
